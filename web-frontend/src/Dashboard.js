@@ -25,12 +25,38 @@ const API_BASE = "http://127.0.0.1:8000/api";
 
 function Dashboard({ onLogout }) {
   const [datasets, setDatasets] = useState([]);
+  const [users, setUsers] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [summary, setSummary] = useState(null);
+  const [records, setRecords] = useState([]);
+  const [filtersMeta, setFiltersMeta] = useState({
+    available_types: [],
+    pressure_range: null,
+    temperature_range: null,
+    name_supported: false,
+    total: 0,
+  });
+  const [filters, setFilters] = useState({
+    type: "",
+    name: "",
+    pressureMin: "",
+    pressureMax: "",
+    temperatureMin: "",
+    temperatureMax: "",
+  });
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const barChartRef = useRef(null);
   const pieChartRef = useRef(null);
+  const storedUser = (() => {
+    try {
+      return JSON.parse(localStorage.getItem('auth_user') || '{}');
+    } catch (err) {
+      return {};
+    }
+  })();
+  const isAdmin = storedUser.is_admin === true;
+  const currentUserId = storedUser.id;
 
   // Get authentication headers
   const getAuthHeaders = () => {
@@ -48,12 +74,26 @@ function Dashboard({ onLogout }) {
 
   useEffect(() => {
     fetchDatasets();
-  }, []);
+    if (isAdmin) {
+      fetchUsers();
+    }
+  }, [isAdmin]);
 
   const fetchDatasets = async () => {
     try {
       const res = await axios.get(`${API_BASE}/datasets/`, getAuthHeaders());
       setDatasets(res.data);
+    } catch (error) {
+      if (error.response?.status === 401) {
+        onLogout();
+      }
+    }
+  };
+
+  const fetchUsers = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/admin/users/`, getAuthHeaders());
+      setUsers(res.data);
     } catch (error) {
       if (error.response?.status === 401) {
         onLogout();
@@ -74,7 +114,7 @@ function Dashboard({ onLogout }) {
       if (fileInput) fileInput.value = "";
       fetchDatasets();
     } catch (err) {
-      alert("Error uploading file");
+      alert("Error uploading file: " + (err.response?.data?.error || err.message));
     } finally {
       setLoading(false);
     }
@@ -108,8 +148,20 @@ function Dashboard({ onLogout }) {
     try {
       const res = await axios.get(`${API_BASE}/datasets/${id}/summary/`, getAuthHeaders());
       setSummary(res.data);
+      const resetFilters = {
+        type: "",
+        name: "",
+        pressureMin: "",
+        pressureMax: "",
+        temperatureMin: "",
+        temperatureMax: "",
+      };
+      setFilters(resetFilters);
+      await fetchRecords(id, resetFilters);
     } catch (err) {
+      alert("Error loading summary: " + (err.response?.data?.error || err.message));
       setSummary(null);
+      setRecords([]);
     }
   };
 
@@ -127,6 +179,18 @@ function Dashboard({ onLogout }) {
       } catch (err) {
         console.error("Error deleting dataset:", err);
         alert("Error deleting dataset: " + (err.response?.data?.error || err.message));
+      }
+    }
+  };
+
+  const deleteUser = async (id) => {
+    if (window.confirm("Are you sure you want to delete this user?")) {
+      try {
+        await axios.delete(`${API_BASE}/admin/users/${id}/`, getAuthHeaders());
+        await fetchUsers();
+        await fetchDatasets();
+      } catch (err) {
+        alert("Error deleting user: " + (err.response?.data?.error || err.message));
       }
     }
   };
@@ -198,6 +262,52 @@ function Dashboard({ onLogout }) {
     pieImg.src = pieImage;
   };
 
+  const fetchRecords = async (datasetId, filterState) => {
+    if (!datasetId) return;
+    const params = {};
+    if (filterState.type) params.type = filterState.type;
+    if (filterState.name) params.name = filterState.name;
+    if (filterState.pressureMin !== "") params.pressure_min = filterState.pressureMin;
+    if (filterState.pressureMax !== "") params.pressure_max = filterState.pressureMax;
+    if (filterState.temperatureMin !== "") params.temperature_min = filterState.temperatureMin;
+    if (filterState.temperatureMax !== "") params.temperature_max = filterState.temperatureMax;
+
+    try {
+      const res = await axios.get(
+        `${API_BASE}/datasets/${datasetId}/records/`,
+        { ...getAuthHeaders(), params }
+      );
+      setRecords(res.data.records || []);
+      setFiltersMeta({
+        available_types: res.data.available_types || [],
+        pressure_range: res.data.pressure_range || null,
+        temperature_range: res.data.temperature_range || null,
+        name_supported: res.data.name_supported === true,
+        total: res.data.total || 0,
+      });
+    } catch (err) {
+      alert("Error loading records: " + (err.response?.data?.error || err.message));
+      setRecords([]);
+    }
+  };
+
+  const applyFilters = async () => {
+    await fetchRecords(selectedId, filters);
+  };
+
+  const clearFilters = async () => {
+    const reset = {
+      type: "",
+      name: "",
+      pressureMin: "",
+      pressureMax: "",
+      temperatureMin: "",
+      temperatureMax: "",
+    };
+    setFilters(reset);
+    await fetchRecords(selectedId, reset);
+  };
+
   return (
     <div className="dashboard">
       {/* Header */}
@@ -207,6 +317,7 @@ function Dashboard({ onLogout }) {
             <div>
               <h1 className="title">Chemical Equipment Visualizer</h1>
               <p className="subtitle">Analyze and visualize your equipment data</p>
+              {isAdmin && <span className="admin-badge">Admin</span>}
             </div>
             <button onClick={onLogout} className="btn btn-small logout-btn">
               🚪 Logout
@@ -244,7 +355,9 @@ function Dashboard({ onLogout }) {
 
           {/* Datasets List */}
           <section className="card datasets-section">
-            <h2 className="section-title">📁 Your Datasets</h2>
+            <h2 className="section-title">
+              {isAdmin ? "📁 All Datasets" : "📁 Your Datasets"}
+            </h2>
             {datasets.length === 0 ? (
               <p className="empty-state">No datasets yet. Upload one to get started.</p>
             ) : (
@@ -256,6 +369,11 @@ function Dashboard({ onLogout }) {
                   >
                     <div className="dataset-info">
                       <p className="dataset-name">Dataset #{d.id}</p>
+                      {isAdmin && d.owner && (
+                        <span className="dataset-owner">
+                          Owner: {d.owner.username} (#{d.owner.id})
+                        </span>
+                      )}
                       <span className="dataset-date">Uploaded recently</span>
                     </div>
                     <div className="dataset-actions">
@@ -278,6 +396,39 @@ function Dashboard({ onLogout }) {
             )}
           </section>
         </div>
+
+        {isAdmin && (
+          <section className="card admin-section">
+            <h2 className="section-title">User Management</h2>
+            {users.length === 0 ? (
+              <p className="empty-state">No users found.</p>
+            ) : (
+              <div className="users-list">
+                {users.map((user) => (
+                  <div key={user.id} className="user-item">
+                    <div className="user-info">
+                      <p className="user-name">{user.username}</p>
+                      <span className="user-meta">
+                        {user.email || "No email"} â€¢ ID #{user.id}
+                        {(user.is_staff || user.is_superuser) && " â€¢ Admin"}
+                      </span>
+                    </div>
+                    <div className="user-actions">
+                      <button
+                        className="btn btn-small btn-danger"
+                        onClick={() => deleteUser(user.id)}
+                        disabled={user.id === currentUserId}
+                        title={user.id === currentUserId ? "You cannot delete yourself" : "Delete user"}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
 
         {/* Summary Section */}
         {summary && (
@@ -382,6 +533,123 @@ function Dashboard({ onLogout }) {
               <button onClick={() => downloadPDF(selectedId)} className="btn btn-primary">
                 📄 Download PDF Report
               </button>
+            </div>
+
+            {/* Filters */}
+            <div className="filters-panel">
+              <div className="filters-header">
+                <h3 className="filters-title">Filter Equipment</h3>
+                <span className="filters-count">
+                  {filtersMeta.total} result{filtersMeta.total === 1 ? "" : "s"}
+                </span>
+              </div>
+              <div className="filters-grid">
+                <div className="filter-group">
+                  <label>Equipment Type</label>
+                  <select
+                    value={filters.type}
+                    onChange={(e) => setFilters({ ...filters, type: e.target.value })}
+                  >
+                    <option value="">All types</option>
+                    {filtersMeta.available_types.map((type) => (
+                      <option key={type} value={type}>{type}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="filter-group">
+                  <label>Search Name</label>
+                  <input
+                    type="text"
+                    placeholder={filtersMeta.name_supported ? "Search equipment name" : "Name column not available"}
+                    value={filters.name}
+                    disabled={!filtersMeta.name_supported}
+                    onChange={(e) => setFilters({ ...filters, name: e.target.value })}
+                  />
+                </div>
+
+                <div className="filter-group">
+                  <label>Pressure Min</label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder={filtersMeta.pressure_range ? `${filtersMeta.pressure_range.min}` : "Min"}
+                    value={filters.pressureMin}
+                    onChange={(e) => setFilters({ ...filters, pressureMin: e.target.value })}
+                  />
+                </div>
+
+                <div className="filter-group">
+                  <label>Pressure Max</label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder={filtersMeta.pressure_range ? `${filtersMeta.pressure_range.max}` : "Max"}
+                    value={filters.pressureMax}
+                    onChange={(e) => setFilters({ ...filters, pressureMax: e.target.value })}
+                  />
+                </div>
+
+                <div className="filter-group">
+                  <label>Temperature Min</label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder={filtersMeta.temperature_range ? `${filtersMeta.temperature_range.min}` : "Min"}
+                    value={filters.temperatureMin}
+                    onChange={(e) => setFilters({ ...filters, temperatureMin: e.target.value })}
+                  />
+                </div>
+
+                <div className="filter-group">
+                  <label>Temperature Max</label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder={filtersMeta.temperature_range ? `${filtersMeta.temperature_range.max}` : "Max"}
+                    value={filters.temperatureMax}
+                    onChange={(e) => setFilters({ ...filters, temperatureMax: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="filters-actions">
+                <button className="btn btn-secondary" onClick={clearFilters}>
+                  Clear
+                </button>
+                <button className="btn btn-primary" onClick={applyFilters}>
+                  Apply Filters
+                </button>
+              </div>
+            </div>
+
+            {/* Records Table */}
+            <div className="records-table-wrapper">
+              {records.length === 0 ? (
+                <p className="records-empty">No records match the selected filters.</p>
+              ) : (
+                <table className="records-table">
+                  <thead>
+                    <tr>
+                      {filtersMeta.name_supported && <th>Equipment Name</th>}
+                      <th>Type</th>
+                      <th>Flowrate</th>
+                      <th>Pressure</th>
+                      <th>Temperature</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {records.map((rec, idx) => (
+                      <tr key={`${rec.type}-${idx}`}>
+                        {filtersMeta.name_supported && <td>{rec.name || "-"}</td>}
+                        <td>{rec.type}</td>
+                        <td>{rec.flowrate}</td>
+                        <td>{rec.pressure}</td>
+                        <td>{rec.temperature}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </section>
         )}

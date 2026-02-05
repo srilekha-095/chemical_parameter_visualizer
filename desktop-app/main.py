@@ -4,7 +4,8 @@ import platform
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QLabel, QScrollArea, QLineEdit, QTabWidget,
     QVBoxLayout, QHBoxLayout, QFileDialog, QListWidget, QListWidgetItem,
-    QFrame, QMessageBox, QGridLayout, QSpacerItem, QSizePolicy
+    QFrame, QMessageBox, QGridLayout, QSpacerItem, QSizePolicy,
+    QComboBox, QTableWidget, QTableWidgetItem, QHeaderView
 )
 from PyQt5.QtCore import Qt, QSize, QRect, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QFont, QColor, QIcon, QPixmap
@@ -13,8 +14,9 @@ from matplotlib.figure import Figure
 import mplcursors
 
 from api_client import (
-    get_datasets, upload_csv, get_summary, delete_dataset, 
-    login, register, download_pdf, set_credentials
+    get_datasets, upload_csv, get_summary, delete_dataset,
+    login, register, download_pdf, set_credentials,
+    get_users, delete_user, get_current_user, get_records
 )
 
 class StyledButton(QPushButton):
@@ -116,7 +118,7 @@ class StyledCard(QFrame):
 
 class DatasetItem(QWidget):
     """Enhanced dataset item with modern styling"""
-    def __init__(self, dataset_id, view_callback, delete_callback):
+    def __init__(self, dataset_id, view_callback, delete_callback, owner_text=None):
         super().__init__()
         self.dataset_id = dataset_id
         self.setMinimumHeight(75)
@@ -152,11 +154,17 @@ class DatasetItem(QWidget):
         dataset_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
         dataset_label.setStyleSheet("color: #111827;")
         
+        info_layout.addWidget(dataset_label)
+
+        if owner_text:
+            owner_label = QLabel(owner_text)
+            owner_label.setFont(QFont("Segoe UI", 9))
+            owner_label.setStyleSheet("color: #6b7280;")
+            info_layout.addWidget(owner_label)
+
         date_label = QLabel("Uploaded recently")
         date_label.setFont(QFont("Segoe UI", 9))
         date_label.setStyleSheet("color: #6b7280;")
-        
-        info_layout.addWidget(dataset_label)
         info_layout.addWidget(date_label)
 
         # Buttons section
@@ -190,6 +198,71 @@ class DatasetItem(QWidget):
             QWidget:hover {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f0f9ff, stop:1 #e0f2fe);
                 border-color: #bfdbfe;
+            }
+        """)
+
+class UserItem(QWidget):
+    """Admin user list item"""
+    def __init__(self, user, delete_callback, disable_delete=False):
+        super().__init__()
+        self.user = user
+        self.setMinimumHeight(70)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        layout = QHBoxLayout()
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(12)
+
+        # Info section
+        info_layout = QVBoxLayout()
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(4)
+
+        username = user.get("username", "Unknown")
+        email = user.get("email") or "No email"
+        user_id = user.get("id", "")
+        is_admin = user.get("is_staff") or user.get("is_superuser")
+
+        name_label = QLabel(username)
+        name_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        name_label.setStyleSheet("color: #111827;")
+
+        meta_text = f"{email} • ID #{user_id}"
+        if is_admin:
+            meta_text += " • Admin"
+        meta_label = QLabel(meta_text)
+        meta_label.setFont(QFont("Segoe UI", 9))
+        meta_label.setStyleSheet("color: #6b7280;")
+
+        info_layout.addWidget(name_label)
+        info_layout.addWidget(meta_label)
+
+        # Actions section
+        actions_layout = QHBoxLayout()
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(8)
+
+        delete_btn = StyledButton("Delete", danger=True, small=True)
+        delete_btn.setMaximumWidth(90)
+        delete_btn.setEnabled(not disable_delete)
+        if disable_delete:
+            delete_btn.setToolTip("You cannot delete yourself")
+        delete_btn.clicked.connect(lambda: delete_callback(user_id))
+        actions_layout.addWidget(delete_btn)
+
+        layout.addLayout(info_layout, 1)
+        layout.addStretch()
+        layout.addLayout(actions_layout)
+        self.setLayout(layout)
+        self.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #fafbfc, stop:1 #f3f4f6);
+                border: 1px solid #e5e7eb;
+                border-radius: 10px;
+            }
+            QWidget:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #fff7ed, stop:1 #ffedd5);
+                border-color: #f59e0b;
             }
         """)
 
@@ -467,6 +540,10 @@ class App(QWidget):
         # Set window icon with validation
         self._set_window_icon()
         
+        # Current user context
+        self.current_user = get_current_user() or {}
+        self.is_admin = bool(self.current_user.get("is_admin"))
+
         # Initialize selected_id to track which dataset is being viewed
         self.selected_id = None
 
@@ -518,6 +595,23 @@ class App(QWidget):
         
         title_layout.addWidget(title)
         title_layout.addWidget(subtitle)
+
+        if self.is_admin:
+            admin_badge = QLabel("Admin")
+            admin_badge.setStyleSheet("""
+                QLabel {
+                    background: rgba(251, 191, 36, 0.2);
+                    color: #fbbf24;
+                    border: 1px solid rgba(251, 191, 36, 0.5);
+                    border-radius: 12px;
+                    padding: 4px 10px;
+                    font-weight: 700;
+                    font-size: 10px;
+                    letter-spacing: 1px;
+                }
+            """)
+            admin_badge.setAlignment(Qt.AlignLeft)
+            title_layout.addWidget(admin_badge)
         
         header_layout.addWidget(icon_container)
         header_layout.addLayout(title_layout, 1)
@@ -608,11 +702,13 @@ class App(QWidget):
         datasets_header = QHBoxLayout()
         datasets_icon = QLabel("📁")
         datasets_icon.setStyleSheet("font-size: 24px; background: transparent;")
-        datasets_title = QLabel("Your Datasets")
-        datasets_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
-        datasets_title.setStyleSheet("color: #111827; background: transparent;")
+        self.datasets_title = QLabel("Your Datasets")
+        self.datasets_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        self.datasets_title.setStyleSheet("color: #111827; background: transparent;")
+        if self.is_admin:
+            self.datasets_title.setText("All Datasets")
         datasets_header.addWidget(datasets_icon)
-        datasets_header.addWidget(datasets_title)
+        datasets_header.addWidget(self.datasets_title)
         datasets_header.addStretch()
         
         self.dataset_list = QListWidget()
@@ -640,6 +736,43 @@ class App(QWidget):
         top_grid.setColumnStretch(1, 1)
 
         content_layout.addLayout(top_grid)
+
+        # Admin user management section
+        if self.is_admin:
+            users_card = StyledCard()
+            users_layout = QVBoxLayout()
+            users_layout.setContentsMargins(20, 20, 20, 20)
+            users_layout.setSpacing(16)
+
+            users_header = QHBoxLayout()
+            users_icon = QLabel("👥")
+            users_icon.setStyleSheet("font-size: 24px; background: transparent;")
+            users_title = QLabel("User Management")
+            users_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
+            users_title.setStyleSheet("color: #111827; background: transparent;")
+            users_header.addWidget(users_icon)
+            users_header.addWidget(users_title)
+            users_header.addStretch()
+
+            self.users_list = QListWidget()
+            self.users_list.setMaximumHeight(260)
+            self.users_list.setStyleSheet("""
+                QListWidget {
+                    border: none;
+                    background-color: transparent;
+                    outline: none;
+                }
+                QListWidget::item {
+                    padding: 0px;
+                    margin: 6px 0px;
+                    background: transparent;
+                }
+            """)
+
+            users_layout.addLayout(users_header)
+            users_layout.addWidget(self.users_list)
+            users_card.setLayout(users_layout)
+            content_layout.addWidget(users_card)
 
         # Enhanced Summary section
         self.summary_card = StyledCard()
@@ -713,6 +846,107 @@ class App(QWidget):
         export_buttons_layout.addWidget(self.pdf_export_btn, 0, 1)
         
         summary_layout.addLayout(export_buttons_layout)
+
+        # Filters section
+        filters_container = QFrame()
+        filters_container.setStyleSheet("""
+            QFrame {
+                background: #fafbfc;
+                border: 1px solid #e5e7eb;
+                border-radius: 12px;
+                padding: 16px;
+            }
+        """)
+        filters_layout = QVBoxLayout(filters_container)
+        filters_layout.setContentsMargins(16, 16, 16, 16)
+        filters_layout.setSpacing(12)
+
+        filters_header = QHBoxLayout()
+        filters_title = QLabel("Filter Equipment")
+        filters_title.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        filters_title.setStyleSheet("color: #111827; background: transparent;")
+        self.filters_count_label = QLabel("0 results")
+        self.filters_count_label.setFont(QFont("Segoe UI", 9))
+        self.filters_count_label.setStyleSheet("color: #6b7280; background: transparent;")
+        filters_header.addWidget(filters_title)
+        filters_header.addStretch()
+        filters_header.addWidget(self.filters_count_label)
+        filters_layout.addLayout(filters_header)
+
+        filters_grid = QGridLayout()
+        filters_grid.setHorizontalSpacing(12)
+        filters_grid.setVerticalSpacing(10)
+
+        self.filter_type = QComboBox()
+        self.filter_type.addItem("All types", "")
+        self.filter_type.setStyleSheet("padding: 6px; border: 1px solid #e5e7eb; border-radius: 6px;")
+        filters_grid.addWidget(QLabel("Equipment Type"), 0, 0)
+        filters_grid.addWidget(self.filter_type, 1, 0)
+
+        self.filter_name = QLineEdit()
+        self.filter_name.setPlaceholderText("Search equipment name")
+        self.filter_name.setStyleSheet("padding: 6px; border: 1px solid #e5e7eb; border-radius: 6px;")
+        filters_grid.addWidget(QLabel("Search Name"), 0, 1)
+        filters_grid.addWidget(self.filter_name, 1, 1)
+
+        self.filter_pressure_min = QLineEdit()
+        self.filter_pressure_min.setPlaceholderText("Min")
+        self.filter_pressure_min.setStyleSheet("padding: 6px; border: 1px solid #e5e7eb; border-radius: 6px;")
+        self.filter_pressure_max = QLineEdit()
+        self.filter_pressure_max.setPlaceholderText("Max")
+        self.filter_pressure_max.setStyleSheet("padding: 6px; border: 1px solid #e5e7eb; border-radius: 6px;")
+        filters_grid.addWidget(QLabel("Pressure Min"), 2, 0)
+        filters_grid.addWidget(self.filter_pressure_min, 3, 0)
+        filters_grid.addWidget(QLabel("Pressure Max"), 2, 1)
+        filters_grid.addWidget(self.filter_pressure_max, 3, 1)
+
+        self.filter_temperature_min = QLineEdit()
+        self.filter_temperature_min.setPlaceholderText("Min")
+        self.filter_temperature_min.setStyleSheet("padding: 6px; border: 1px solid #e5e7eb; border-radius: 6px;")
+        self.filter_temperature_max = QLineEdit()
+        self.filter_temperature_max.setPlaceholderText("Max")
+        self.filter_temperature_max.setStyleSheet("padding: 6px; border: 1px solid #e5e7eb; border-radius: 6px;")
+        filters_grid.addWidget(QLabel("Temperature Min"), 4, 0)
+        filters_grid.addWidget(self.filter_temperature_min, 5, 0)
+        filters_grid.addWidget(QLabel("Temperature Max"), 4, 1)
+        filters_grid.addWidget(self.filter_temperature_max, 5, 1)
+
+        filters_layout.addLayout(filters_grid)
+
+        filters_actions = QHBoxLayout()
+        filters_actions.addStretch()
+        self.filters_clear_btn = StyledButton("Clear", small=True)
+        self.filters_clear_btn.clicked.connect(self.clear_filters)
+        self.filters_apply_btn = StyledButton("Apply Filters", primary=True, small=True)
+        self.filters_apply_btn.clicked.connect(self.apply_filters)
+        filters_actions.addWidget(self.filters_clear_btn)
+        filters_actions.addWidget(self.filters_apply_btn)
+        filters_layout.addLayout(filters_actions)
+
+        summary_layout.addWidget(filters_container)
+
+        # Records table
+        self.records_table = QTableWidget()
+        self.records_table.setColumnCount(5)
+        self.records_table.setHorizontalHeaderLabels(["Equipment Name", "Type", "Flowrate", "Pressure", "Temperature"])
+        self.records_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.records_table.verticalHeader().setVisible(False)
+        self.records_table.setAlternatingRowColors(True)
+        self.records_table.setStyleSheet("""
+            QTableWidget {
+                border: 1px solid #e5e7eb;
+                border-radius: 10px;
+                background: white;
+            }
+            QHeaderView::section {
+                background: #f3f4f6;
+                color: #374151;
+                padding: 6px;
+                border: none;
+                font-weight: 600;
+            }
+        """)
+        summary_layout.addWidget(self.records_table)
         
         self.summary_card.setLayout(summary_layout)
         content_layout.addWidget(self.summary_card, 1)
@@ -779,18 +1013,68 @@ class App(QWidget):
             item.setSizeHint(QSize(0, 160))
             self.dataset_list.addItem(item)
             self.dataset_list.setItemWidget(item, empty_widget)
+            if self.is_admin:
+                self.refresh_users()
             return
             
         for d in datasets:
+            owner_text = None
+            if self.is_admin and d.get("owner"):
+                owner = d.get("owner", {})
+                owner_text = f"Owner: {owner.get('username', 'Unknown')} (#{owner.get('id', '')})"
             item = QListWidgetItem()
             widget = DatasetItem(
                 d["id"],
                 self.view_dataset,
-                self.delete_dataset_ui
+                self.delete_dataset_ui,
+                owner_text=owner_text
             )
             item.setSizeHint(widget.sizeHint())
             self.dataset_list.addItem(item)
             self.dataset_list.setItemWidget(item, widget)
+
+        if self.is_admin:
+            self.refresh_users()
+
+    def refresh_users(self):
+        if not self.is_admin:
+            return
+        self.users_list.clear()
+        users = get_users()
+        if not users:
+            empty_widget = QWidget()
+            empty_layout = QVBoxLayout(empty_widget)
+            empty_layout.setContentsMargins(20, 30, 20, 30)
+
+            empty_icon = QLabel("👤")
+            empty_icon.setStyleSheet("font-size: 36px; background: transparent;")
+            empty_icon.setAlignment(Qt.AlignCenter)
+
+            empty_label = QLabel("No users found.")
+            empty_label.setFont(QFont("Segoe UI", 11))
+            empty_label.setStyleSheet("color: #9ca3af; background: transparent;")
+            empty_label.setAlignment(Qt.AlignCenter)
+
+            empty_layout.addWidget(empty_icon)
+            empty_layout.addWidget(empty_label)
+
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, 120))
+            self.users_list.addItem(item)
+            self.users_list.setItemWidget(item, empty_widget)
+            return
+
+        current_id = self.current_user.get("id")
+        for user in users:
+            item = QListWidgetItem()
+            widget = UserItem(
+                user,
+                self.delete_user_ui,
+                disable_delete=(user.get("id") == current_id)
+            )
+            item.setSizeHint(widget.sizeHint())
+            self.users_list.addItem(item)
+            self.users_list.setItemWidget(item, widget)
 
     def upload_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select CSV File", "", "CSV Files (*.csv)")
@@ -798,10 +1082,15 @@ class App(QWidget):
             try:
                 file_name = file_path.split('/')[-1]
                 self.file_label.setText(f"📄 {file_name}")
-                upload_csv(file_path)
-                self.file_label.setText("✅ File uploaded successfully!")
-                self.file_label.setStyleSheet("color: #10b981; background: transparent;")
-                self.refresh_datasets()
+                result = upload_csv(file_path)
+                if result and result.get("error"):
+                    self.file_label.setText("❌ Upload failed")
+                    self.file_label.setStyleSheet("color: #ef4444; background: transparent;")
+                    QMessageBox.warning(self, "Upload Error", result.get("error"))
+                else:
+                    self.file_label.setText("✅ File uploaded successfully!")
+                    self.file_label.setStyleSheet("color: #10b981; background: transparent;")
+                    self.refresh_datasets()
             except Exception as e:
                 self.file_label.setText(f"❌ Upload failed")
                 self.file_label.setStyleSheet("color: #ef4444; background: transparent;")
@@ -898,6 +1187,105 @@ class App(QWidget):
             stat_card = StatCard(label, value, icon, color_start, color_end)
             self.stats_layout.addWidget(stat_card, i // 2, i % 2)
 
+    def _collect_filter_params(self):
+        params = {}
+        selected_type = self.filter_type.currentData()
+        if selected_type:
+            params["type"] = selected_type
+
+        name_value = self.filter_name.text().strip()
+        if name_value:
+            params["name"] = name_value
+
+        if self.filter_pressure_min.text().strip():
+            params["pressure_min"] = self.filter_pressure_min.text().strip()
+        if self.filter_pressure_max.text().strip():
+            params["pressure_max"] = self.filter_pressure_max.text().strip()
+        if self.filter_temperature_min.text().strip():
+            params["temperature_min"] = self.filter_temperature_min.text().strip()
+        if self.filter_temperature_max.text().strip():
+            params["temperature_max"] = self.filter_temperature_max.text().strip()
+        return params
+
+    def apply_filters(self):
+        if not self.selected_id:
+            return
+        self.fetch_records(self.selected_id, self._collect_filter_params())
+
+    def clear_filters(self):
+        if not self.selected_id:
+            return
+        self.filter_type.setCurrentIndex(0)
+        self.filter_name.setText("")
+        self.filter_pressure_min.setText("")
+        self.filter_pressure_max.setText("")
+        self.filter_temperature_min.setText("")
+        self.filter_temperature_max.setText("")
+        self.fetch_records(self.selected_id, {})
+
+    def _update_filters_meta(self, meta, keep_type=None):
+        types = meta.get("available_types", [])
+        current_type = keep_type if keep_type is not None else self.filter_type.currentData()
+        self.filter_type.blockSignals(True)
+        self.filter_type.clear()
+        self.filter_type.addItem("All types", "")
+        for t in types:
+            self.filter_type.addItem(str(t), str(t))
+        if current_type and current_type in types:
+            self.filter_type.setCurrentIndex(self.filter_type.findData(current_type))
+        else:
+            self.filter_type.setCurrentIndex(0)
+        self.filter_type.blockSignals(False)
+
+        name_supported = bool(meta.get("name_supported"))
+        self.filter_name.setDisabled(not name_supported)
+        if not name_supported:
+            self.filter_name.setText("")
+            self.filter_name.setPlaceholderText("Name column not available")
+        else:
+            self.filter_name.setPlaceholderText("Search equipment name")
+
+        pressure_range = meta.get("pressure_range") or {}
+        temperature_range = meta.get("temperature_range") or {}
+        if pressure_range:
+            self.filter_pressure_min.setPlaceholderText(str(pressure_range.get("min", "Min")))
+            self.filter_pressure_max.setPlaceholderText(str(pressure_range.get("max", "Max")))
+        if temperature_range:
+            self.filter_temperature_min.setPlaceholderText(str(temperature_range.get("min", "Min")))
+            self.filter_temperature_max.setPlaceholderText(str(temperature_range.get("max", "Max")))
+
+        total = meta.get("total", 0)
+        self.filters_count_label.setText(f"{total} result" + ("" if total == 1 else "s"))
+
+    def _update_records_table(self, records, name_supported):
+        headers = ["Type", "Flowrate", "Pressure", "Temperature"]
+        if name_supported:
+            headers = ["Equipment Name"] + headers
+        self.records_table.setColumnCount(len(headers))
+        self.records_table.setHorizontalHeaderLabels(headers)
+        self.records_table.setRowCount(len(records))
+
+        for row_idx, rec in enumerate(records):
+            col = 0
+            if name_supported:
+                item = QTableWidgetItem(str(rec.get("name", "-")))
+                self.records_table.setItem(row_idx, col, item)
+                col += 1
+            self.records_table.setItem(row_idx, col, QTableWidgetItem(str(rec.get("type", ""))))
+            self.records_table.setItem(row_idx, col + 1, QTableWidgetItem(str(rec.get("flowrate", ""))))
+            self.records_table.setItem(row_idx, col + 2, QTableWidgetItem(str(rec.get("pressure", ""))))
+            self.records_table.setItem(row_idx, col + 3, QTableWidgetItem(str(rec.get("temperature", ""))))
+
+    def fetch_records(self, dataset_id, params):
+        payload = get_records(dataset_id, params)
+        if payload.get("error"):
+            QMessageBox.warning(self, "Records Error", payload.get("error"))
+            return
+        self._update_filters_meta(payload, keep_type=params.get("type") if params else None)
+        records = payload.get("records", [])
+        name_supported = bool(payload.get("name_supported"))
+        self._update_records_table(records, name_supported)
+
     def view_dataset(self, dataset_id):
         self.selected_id = dataset_id
         summary = get_summary(dataset_id)
@@ -909,6 +1297,7 @@ class App(QWidget):
         self.summary_card.setVisible(True)
         self.update_stats_display(summary)
         self.plot_chart(summary['equipment_type_distribution'])
+        self.clear_filters()
 
     def delete_dataset_ui(self, dataset_id):
         delete_dataset(dataset_id)
@@ -916,6 +1305,24 @@ class App(QWidget):
         self.summary_card.setVisible(False)
         self.figure.clear()
         self.canvas.draw()
+
+    def delete_user_ui(self, user_id):
+        if not user_id:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Delete User",
+            "Are you sure you want to delete this user?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        status = delete_user(user_id)
+        if status in [200, 204]:
+            self.refresh_users()
+            self.refresh_datasets()
+        else:
+            QMessageBox.warning(self, "Error", "Failed to delete user.")
 
     def download_pdf_report(self):
         """Download PDF report for current dataset"""

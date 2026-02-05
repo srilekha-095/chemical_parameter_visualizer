@@ -8,8 +8,41 @@ from io import BytesIO
 from datetime import datetime
 import matplotlib.pyplot as plt
 
+REQUIRED_COLUMNS = ["Flowrate", "Pressure", "Temperature", "Type"]
+
+def _format_invalid_rows(indices, max_items=5):
+    if not indices:
+        return ""
+    shown = indices[:max_items]
+    if len(indices) > max_items:
+        return f"{', '.join(map(str, shown))}, ..."
+    return ", ".join(map(str, shown))
+
+def validate_csv(file_path):
+    try:
+        df = pd.read_csv(file_path)
+    except Exception:
+        raise ValueError("Invalid CSV file.")
+
+    if df is None or df.empty or len(df.columns) == 0:
+        raise ValueError("Empty file.")
+
+    missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required column(s): {', '.join(missing)}.")
+
+    for col in ["Flowrate", "Pressure", "Temperature"]:
+        series = pd.to_numeric(df[col], errors="coerce")
+        invalid_mask = series.isna()
+        if invalid_mask.any():
+            invalid_rows = (df.index[invalid_mask] + 2).tolist()
+            rows_text = _format_invalid_rows(invalid_rows)
+            raise ValueError(f"Invalid value in column '{col}' at row(s): {rows_text}.")
+
+    return df
+
 def analyze_csv(file_path):
-    df = pd.read_csv(file_path)
+    df = validate_csv(file_path)
 
     summary = {
         "total_equipment": len(df),

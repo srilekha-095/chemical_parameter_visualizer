@@ -27,7 +27,10 @@ function Login({ onLoginSuccess }) {
       
       // Store credentials in localStorage
       localStorage.setItem('auth_user', JSON.stringify({
+        id: response.data.id,
         username: response.data.username,
+        email: response.data.email,
+        is_admin: response.data.is_admin === true,
         credentials: btoa(`${username}:${password}`),
       }));
 
