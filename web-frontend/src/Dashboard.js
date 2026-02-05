@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import axios from "axios";
 import { Bar, Pie } from "react-chartjs-2";
 import {
@@ -59,7 +59,7 @@ function Dashboard({ onLogout }) {
   const currentUserId = storedUser.id;
 
   // Get authentication headers
-  const getAuthHeaders = () => {
+  const getAuthHeaders = useCallback(() => {
     const authUser = localStorage.getItem('auth_user');
     if (authUser) {
       const { credentials } = JSON.parse(authUser);
@@ -70,16 +70,9 @@ function Dashboard({ onLogout }) {
       };
     }
     return {};
-  };
+  }, []);
 
-  useEffect(() => {
-    fetchDatasets();
-    if (isAdmin) {
-      fetchUsers();
-    }
-  }, [isAdmin]);
-
-  const fetchDatasets = async () => {
+  const fetchDatasets = useCallback(async () => {
     try {
       const res = await axios.get(`${API_BASE}/datasets/`, getAuthHeaders());
       setDatasets(res.data);
@@ -88,9 +81,9 @@ function Dashboard({ onLogout }) {
         onLogout();
       }
     }
-  };
+  }, [getAuthHeaders, onLogout]);
 
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
       const res = await axios.get(`${API_BASE}/admin/users/`, getAuthHeaders());
       setUsers(res.data);
@@ -99,7 +92,14 @@ function Dashboard({ onLogout }) {
         onLogout();
       }
     }
-  };
+  }, [getAuthHeaders, onLogout]);
+
+  useEffect(() => {
+    fetchDatasets();
+    if (isAdmin) {
+      fetchUsers();
+    }
+  }, [fetchDatasets, fetchUsers, isAdmin]);
 
   const uploadCSV = async () => {
     if (!file) return;
@@ -168,7 +168,7 @@ function Dashboard({ onLogout }) {
   const deleteDataset = async (id) => {
     if (window.confirm("Are you sure you want to delete this dataset?")) {
       try {
-        const response = await axios.delete(`${API_BASE}/datasets/${id}/`, getAuthHeaders());
+        await axios.delete(`${API_BASE}/datasets/${id}/`, getAuthHeaders());
         // Clear the summary if the deleted dataset was being viewed
         if (selectedId === id) {
           setSummary(null);
